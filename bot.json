@@ -1,1 +1,332 @@
-__WORKFLOW__
+{
+  "name": "بوت واتساب - شاليهات الثرى",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a1",
+      "name": "Webhook واتساب",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "wa-altharaa"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst out = [];\nfor (const item of items) {\n  const b = item.json.body || item.json;\n  const d = b.data || {};\n  const key = d.key || {};\n  if (key.fromMe) continue;\n  const jid = key.remoteJid || '';\n  if (!jid.endsWith('@s.whatsapp.net')) continue;\n  const msg = d.message || {};\n  const text = msg.conversation || (msg.extendedTextMessage && msg.extendedTextMessage.text) || '';\n  if (!text.trim()) continue;\n  out.push({ json: { phone: jid.replace('@s.whatsapp.net',''), text: text.trim(), name: d.pushName || 'عميل' } });\n}\nreturn out;"
+      },
+      "id": "a2",
+      "name": "استخراج الرسالة",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://chalet-admin-rtl.emergent.host/api/auth/login",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"username\":\"admin\",\"password\":\"Aa0557443984\"}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "a3",
+      "name": "دخول نظام الإدارة",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://chalet-admin-rtl.emergent.host/api/chalets",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('دخول نظام الإدارة').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "a4",
+      "name": "جلب الشاليهات",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://chalet-admin-rtl.emergent.host/api/bookings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('دخول نظام الإدارة').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "a5",
+      "name": "جلب الحجوزات",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chalets = $('جلب الشاليهات').first().json;\nconst bookings = $('جلب الحجوزات').first().json;\nconst msg = $('استخراج الرسالة').first().json;\nconst list = Array.isArray(chalets) ? chalets : [chalets];\nconst bks = Array.isArray(bookings) ? bookings : [bookings];\nlet txt = 'الشاليهات والأسعار:\\n';\nfor (const c of list) {\n  if (!c.active) continue;\n  txt += `- ${c.name} (المعرف: ${c.id}) — وسط الأسبوع: ${c.weekday_price} ريال، نهاية الأسبوع: ${c.weekend_price} ريال، السعة: ${c.capacity} أشخاص. ${c.description||''}\\n`;\n  const occ = bks.filter(b => b.chalet_id === c.id && !['ملغي','منتهي'].includes(b.status||''));\n  if (occ.length) {\n    txt += '  التواريخ المحجوزة: ' + occ.map(b => `${b.check_in} إلى ${b.check_out}`).join('، ') + '\\n';\n  } else {\n    txt += '  لا توجد حجوزات حالياً — متاح بالكامل.\\n';\n  }\n}\nreturn [{ json: { ...msg, availability: txt } }];"
+      },
+      "id": "a6",
+      "name": "بناء ملخص التوافر",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.text }}",
+        "options": {
+          "systemMessage": "=أنت مساعد حجوزات واتساب لـ «شاليهات الثرى». اسم العميل: {{ $json.name }}، جواله: {{ $json.phone }}، تاريخ اليوم: {{ $now.toFormat('yyyy-MM-dd') }}.\n\nبيانات التوافر الحالية من النظام:\n{{ $json.availability }}\n\nقواعد صارمة:\n1. لا تذكر توافر أو سعر غير موجود في البيانات أعلاه أبداً.\n2. التحقق من التوافر: التاريخ متاح إذا لم يكن ضمن أي فترة محجوزة لذلك الشاليه.\n3. ردودك قصيرة وودية بأسلوب واتساب، بالعربي.\n4. إذا طلب العميل الحجز: اجمع (الاسم، الجوال، الشاليه، تاريخ الوصول، تاريخ المغادرة) ثم استخدم أداة create_booking. لا تنفذ الحجز قبل اكتمال البيانات وتأكيد العميل.\n5. الحجز يسجل كـ «استفسار» — أخبر العميل أن الحجز سجل وسيتواصل معه المسؤول لتأكيد العربون.\n6. إذا لم يوجد شاليه متاح، اعتذر واقترح تواريخ بديلة من البيانات."
+        }
+      },
+      "id": "a7",
+      "name": "وكيل الذكاء الاصطناعي",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1150,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gemini-2.0-flash",
+        "options": {}
+      },
+      "id": "a8",
+      "name": "Gemini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        520
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "",
+          "name": "Google Gemini (مجاني)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('استخراج الرسالة').item.json.phone }}",
+        "contextWindowLength": 15
+      },
+      "id": "a9",
+      "name": "ذاكرة المحادثة",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1230,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "name": "create_booking",
+        "description": "تسجيل حجز جديد في نظام الإدارة. استدعها فقط بعد اكتمال بيانات العميل وتأكيده. المدخل JSON: {\"guest_name\":\"...\",\"mobile\":\"...\",\"chalet_id\":\"chalet_1\",\"check_in\":\"YYYY-MM-DD\",\"check_out\":\"YYYY-MM-DD\"}",
+        "jsCode": "const p = JSON.parse(query);\nconst token = $('دخول نظام الإدارة').first().json.token;\nconst res = await this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://chalet-admin-rtl.emergent.host/api/bookings',\n  headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },\n  body: { guest_name: p.guest_name, mobile: p.mobile, status: 'استفسار',\n    booking_items: [{ chalet_id: p.chalet_id, check_in: p.check_in, check_out: p.check_out }] },\n  json: true\n});\nreturn JSON.stringify({ نجاح: true, رقم_الحجز: res.booking_code, الإجمالي: res.total_price });"
+      },
+      "id": "a10",
+      "name": "أداة تسجيل الحجز",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://evolution:8080/message/sendText/altharaa",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{$env.EVOLUTION_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"number\":\"{{ $('استخراج الرسالة').item.json.phone }}\",\"text\":\"{{ $json.output }}\"}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "a11",
+      "name": "إرسال رد واتساب",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook واتساب": {
+      "main": [
+        [
+          {
+            "node": "استخراج الرسالة",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "استخراج الرسالة": {
+      "main": [
+        [
+          {
+            "node": "دخول نظام الإدارة",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "دخول نظام الإدارة": {
+      "main": [
+        [
+          {
+            "node": "جلب الشاليهات",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "جلب الحجوزات",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "جلب الشاليهات": {
+      "main": [
+        [
+          {
+            "node": "بناء ملخص التوافر",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "جلب الحجوزات": {
+      "main": [
+        [
+          {
+            "node": "بناء ملخص التوافر",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "بناء ملخص التوافر": {
+      "main": [
+        [
+          {
+            "node": "وكيل الذكاء الاصطناعي",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "وكيل الذكاء الاصطناعي",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ذاكرة المحادثة": {
+      "ai_memory": [
+        [
+          {
+            "node": "وكيل الذكاء الاصطناعي",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "أداة تسجيل الحجز": {
+      "ai_tool": [
+        [
+          {
+            "node": "وكيل الذكاء الاصطناعي",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "وكيل الذكاء الاصطناعي": {
+      "main": [
+        [
+          {
+            "node": "إرسال رد واتساب",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {}
+}
